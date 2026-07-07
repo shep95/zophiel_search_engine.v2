@@ -30,6 +30,18 @@ export function parseQuery(raw: string): ParsedQuery {
   let locationPhrase = '';
   let namePart = normalized;
 
+  const whoIsTopic = normalized.match(/^who\s+is\s+(.+?)\s+who\s+(.+)$/i);
+  if (whoIsTopic) {
+    namePart = whoIsTopic[1]!.trim();
+    locationPhrase = whoIsTopic[2]!.trim().replace(/[?.!,]+$/, '');
+  } else {
+    const whoIsIn = normalized.match(/^who\s+is\s+(.+?)\s+in\s+(.+)$/i);
+    if (whoIsIn) {
+      namePart = whoIsIn[1]!.trim();
+      locationPhrase = whoIsIn[2]!.trim().replace(/[?.!,]+$/, '');
+    }
+  }
+
   for (const pattern of LOCATION_PHRASES) {
     const match = normalized.match(pattern);
     if (match?.[1]) {
@@ -99,7 +111,8 @@ function extractEmbeddedLocation(text: string): string {
 
 function tokenizePerson(text: string, locationTokens: string[]): string[] {
   const locSet = new Set(locationTokens);
-  return text
+  const cleaned = text.replace(/^who\s+is\s+/i, '').trim();
+  return cleaned
     .toLowerCase()
     .split(/\s+/)
     .filter(

@@ -4,8 +4,10 @@ import type { ParsedQuery } from '../core/taxonomy.js';
 import type { SearchHit } from '../core/types.js';
 import type { GhostChainCrawler } from '../crawler.js';
 import { parseQuery } from '../discovery/query-parser.js';
+import { COUNTRIES_AND_REGIONS, US_STATES } from '../discovery/region-hints.js';
 import { SerpDiscovery } from '../discovery/serp-discovery.js';
 import { parseSearchQuery } from '../search/query-operators.js';
+import { textMatchesSubject } from '../synthesis/subject-match.js';
 
 export interface GatherSearchOptions {
   /** Skip crawling when local hits meet this threshold. Default 3. */
@@ -54,14 +56,15 @@ export class GatherSearch {
 
     const pagesIndexedBefore = this.crawler.getIndexedPageCount();
     let pass2Hits = this.runPass2Search(query, subject, limit);
+    const relevantHits = filterSubjectHits(pass2Hits, subject);
 
     const needsGather =
       options.forceGather ||
       pagesIndexedBefore === 0 ||
-      pass2Hits.length < minResults;
+      relevantHits.length < minResults;
 
     if (!needsGather) {
-      this.logger.info({ hits: pass2Hits.length, query }, 'Pass 2 satisfied from existing index');
+      this.logger.info({ hits: relevantHits.length, query }, 'Pass 2 satisfied from existing index');
       return {
         query,
         gathered: false,
@@ -69,7 +72,7 @@ export class GatherSearch {
         pagesIndexedAfter: pagesIndexedBefore,
         pagesCrawled: 0,
         discoveredUrls: 0,
-        hits: pass2Hits,
+        hits: relevantHits,
         subject,
       };
     }
@@ -119,7 +122,7 @@ export class GatherSearch {
     );
 
     // Pass 2 — analyst: operators + keywords on the case file
-    pass2Hits = this.runPass2Search(query, subject, limit);
+    pass2Hits = filterSubjectHits(this.runPass2Search(query, subject, limit), subject);
     this.logger.info({ hits: pass2Hits.length, query }, 'Pass 2 complete — operator search on index');
 
     return {
@@ -140,6 +143,24 @@ export class GatherSearch {
     }
     return this.crawler.search(query, limit);
   }
+}
+
+function filterSubjectHits(hits: SearchHit[], subject: ParsedQuery): SearchHit[] {
+  return hits.filter((hit) => hitMatchesSubject(hit, subject));
+}
+
+function hitMatchesSubject(hit: SearchHit, subject: ParsedQuery): boolean {
+  const hay = `${hit.document.title} ${hit.document.body} ${hit.document.url}`.toLowerCase();
+  const personHits = subject.personTokens.filter((t) => hay.includes(t)).length;
+  const minPerson = subject.personTokens.length >= 2 ? 2 : 1;
+  if (personHits < minPerson) return false;
+
+  const hasGeo = subject.locationTokens.some((t) =>
+    COUNTRIES_AND_REGIONS.has(t) || US_STATES.has(t),
+  );
+  if (!hasGeo) return true;
+
+  return subject.locationTokens.some((t) => hay.includes(t)) || textMatchesSubject(hay, subject);
 }
 
 /** Mission-tuned config for gather searches. */
