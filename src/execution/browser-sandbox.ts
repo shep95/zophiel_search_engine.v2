@@ -16,6 +16,9 @@ import {
 } from './stack-detector.js';
 import { parseStaticHtml } from './static-html-scraper.js';
 import { waitForStackHydration } from './stack-wait.js';
+import { detectBlock, isMissionUsefulContent } from './block-detector.js';
+import { buildBypassLadder, STEALTH_INIT_SCRIPT, type BypassAttempt } from './bypass-registry.js';
+import { warmSunbizSession, waitForBizapediaChallenge } from './sunbiz-navigator.js';
 
 export interface TextBlock {
   text: string;
@@ -41,6 +44,8 @@ export interface RenderedPage {
   stack: DetectedStack;
   renderMode: RenderMode;
   responseMs: number;
+  bypassStrategy?: string;
+  blockSignals?: string[];
 }
 
 const INTERACTION_SELECTORS = [
@@ -96,6 +101,67 @@ export class BrowserSandbox {
   }
 
   async renderPage(url: string, userAgent: string, interactionHints: string[] = []): Promise<RenderedPage> {
+    if (!this.config.bypassEnabled) {
+      return this.renderPageOnce(url, userAgent, interactionHints);
+    }
+
+    const ladder = buildBypassLadder(url, this.config.bypassMaxAttempts);
+    let lastError: Error | null = null;
+    const blockSignals: string[] = [];
+
+    for (const attempt of ladder) {
+      try {
+        const rendered = await this.renderPageOnce(
+          attempt.url,
+          userAgent,
+          interactionHints,
+          attempt,
+        );
+
+        const bodyText = rendered.visibleTextBlocks.map((b) => b.text).join('\n');
+        const block = detectBlock({
+          status: 200,
+          html: rendered.html,
+          title: rendered.title,
+          url: rendered.finalUrl,
+          antiBotSignatures: rendered.antiBotSignatures,
+          textBlockCount: rendered.visibleTextBlocks.length,
+          bodyTextLength: bodyText.length,
+        });
+
+        if (block.kind !== 'none') blockSignals.push(`${attempt.strategyId}:${block.signature}`);
+
+        const useful = isMissionUsefulContent(bodyText, rendered.title, rendered.finalUrl);
+        if (useful && block.kind !== 'captcha_gate' && block.kind !== 'shell_redirect') {
+          return { ...rendered, bypassStrategy: attempt.strategyId, blockSignals };
+        }
+
+        if (block.kind === 'shell_redirect' || block.kind === 'empty_shell' || block.kind === 'captcha_gate') {
+          continue;
+        }
+
+        if (rendered.visibleTextBlocks.length >= 5 && bodyText.length > 500) {
+          return { ...rendered, bypassStrategy: attempt.strategyId, blockSignals };
+        }
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        if (error instanceof GhostChainError && error.code === 'HTTP_ERROR') {
+          const status = error.details?.status as number | undefined;
+          if (status === 403 || status === 429) continue;
+        }
+      }
+    }
+
+    if (lastError) throw lastError;
+    return this.renderPageOnce(url, userAgent, interactionHints);
+  }
+
+  private async renderPageOnce(
+    url: string,
+    userAgent: string,
+    interactionHints: string[] = [],
+    bypass?: BypassAttempt,
+  ): Promise<RenderedPage> {
     if (!this.browser) await this.init();
     const start = Date.now();
     let context: BrowserContext | null = null;
@@ -104,21 +170,28 @@ export class BrowserSandbox {
     try {
       context = await this.browser!.newContext({
         userAgent,
-        viewport: { width: 1440, height: 900 },
-        locale: 'en-US',
-        timezoneId: 'America/New_York',
+        viewport: bypass?.contextOptions?.viewport ?? { width: 1440, height: 900 },
+        locale: bypass?.contextOptions?.locale ?? 'en-US',
+        timezoneId: bypass?.contextOptions?.timezoneId ?? 'America/New_York',
         javaScriptEnabled: true,
         ignoreHTTPSErrors: false,
+        isMobile: bypass?.contextOptions?.isMobile,
+        hasTouch: bypass?.contextOptions?.hasTouch,
+        extraHTTPHeaders: bypass?.extraHeaders,
       });
 
-      await context.addInitScript(
-        'Object.defineProperty(navigator, "webdriver", { get: () => undefined });',
-      );
+      await context.addInitScript(STEALTH_INIT_SCRIPT);
 
       page = await context.newPage();
       page.setDefaultTimeout(this.config.pageLoadTimeoutMs);
 
       const jsonCapture = attachJsonResponseCapture(page);
+
+      if (bypass?.preNavigation === 'sunbiz_warm') {
+        await warmSunbizSession(page);
+      } else if (bypass?.preNavigation === 'delay') {
+        await page.waitForTimeout(800 + Math.random() * 1200);
+      }
 
       const response = await page.goto(url, {
         waitUntil: 'domcontentloaded',
@@ -133,6 +206,16 @@ export class BrowserSandbox {
         throw new GhostChainError(`HTTP ${response.status()}`, 'HTTP_ERROR', response.status() >= 500, {
           status: response.status(),
         });
+      }
+
+      if (bypass?.strategyId === 'bizapedia_challenge_wait') {
+        await waitForBizapediaChallenge(page, bypass.postLoadWaitMs || 12000);
+      } else if (bypass?.postLoadWaitMs) {
+        await page.waitForTimeout(bypass.postLoadWaitMs);
+      }
+
+      if (bypass?.waitForSelector) {
+        await page.waitForSelector(bypass.waitForSelector, { timeout: 8000 }).catch(() => undefined);
       }
 
       const responseHeaders = normalizeHeaders(response.headers());

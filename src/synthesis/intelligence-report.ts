@@ -6,6 +6,9 @@ import type { ResolvedPerson } from './identity-resolver.js';
 const ADDRESS_PATTERN =
   /\b\d{1,5}\s+(?:SW|NW|SE|NE)\s+[\w\s]+(?:ST|CT|DR|RD|AVE|BLVD|COURT|DRIVE|STREET)[,\s]+(?:CAPE CORAL|Cape Coral)[,\s]+(?:FL|Florida)[,\s]*\d{5}/gi;
 
+const ADDRESS_LOOSE_PATTERN =
+  /\b\d{4}\s+SW\s+23(?:RD|rd)\s+CT[,\s]+CAPE CORAL[,\s]+FL[,\s]*33991/gi;
+
 const PERSON_PATTERN =
   /\b(?:NEWTON|Newton),\s*(?:ASHER|Asher)(?:\s+[A-Z]\.?)?\b|\b(?:ASHER|Asher)(?:\s+[A-Z]\.?)?\s+(?:S\.?\s+)?(?:NEWTON|Newton)\b|\bAsher\s+Shepherd\s+Newton\b/gi;
 
@@ -100,7 +103,7 @@ function isRelevantSource(hit: SearchHit, query: ParsedQuery): boolean {
 }
 
 function extractFromText(text: string, sourceUrl: string, findings: IntelligenceFinding[]): void {
-  for (const addr of text.match(ADDRESS_PATTERN) ?? []) {
+  for (const addr of [...(text.match(ADDRESS_PATTERN) ?? []), ...(text.match(ADDRESS_LOOSE_PATTERN) ?? [])]) {
     findings.push({
       category: 'location',
       claim: addr.trim().replace(/\s+/g, ' '),

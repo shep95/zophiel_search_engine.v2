@@ -81,6 +81,10 @@ async function main() {
         },
         piiScrubMode: 'sensitive_only',
         concurrency: 2,
+        bypassEnabled: true,
+        bypassMaxAttempts: 5,
+        robotsOverrideDomains: ['linkedin.com', 'www.linkedin.com'],
+        missionForceRefreshDomains: ['bisprofiles.com', 'www.bisprofiles.com', 'search.sunbiz.org'],
       });
       const missionLogger = createLogger(missionConfig);
       const missionCrawler = new GhostChainCrawler(missionConfig, missionLogger);
@@ -91,8 +95,8 @@ async function main() {
 
       try {
         const { mission, report, reportPath } = await orchestrator.run(query, {
-          maxDiscoveries: 12,
-          maxCrawlPages: 12,
+          maxDiscoveries: 15,
+          maxCrawlPages: 15,
           crawlDepth: 1,
         });
 

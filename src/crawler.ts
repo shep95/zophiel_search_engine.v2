@@ -165,7 +165,13 @@ export class GhostChainCrawler {
     const userAgent = this.browser.pickUserAgent();
 
     await this.rateLimiter.waitForSlot(job.domain);
-    await checkRobotsAllowed(job.url, userAgent, this.config.scope.respectRobotsTxt, log);
+    await checkRobotsAllowed(
+      job.url,
+      userAgent,
+      this.config.scope.respectRobotsTxt,
+      log,
+      this.missionMode === 'permissive' ? this.config.robotsOverrideDomains : [],
+    );
 
     const hints = this.immuneMemory.getInteractionHints(job.domain);
     const rendered = await this.browser.renderPage(job.url, userAgent, hints);
@@ -173,6 +179,9 @@ export class GhostChainCrawler {
 
     if (rendered.antiBotSignatures.length > 0) {
       log.warn({ signatures: rendered.antiBotSignatures }, 'Anti-bot signatures detected');
+    }
+    if (rendered.bypassStrategy) {
+      log.info({ bypassStrategy: rendered.bypassStrategy, blockSignals: rendered.blockSignals }, 'Block bypass applied');
     }
 
     const segments = buildSegments(rendered.visibleTextBlocks, this.config.piiScrubMode);

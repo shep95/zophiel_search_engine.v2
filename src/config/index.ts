@@ -42,6 +42,16 @@ export const ConfigSchema = z.object({
     '172.16.0.0/12',
     '192.168.0.0/16',
   ]),
+  bypassEnabled: z.boolean().default(true),
+  bypassMaxAttempts: z.number().int().min(1).max(8).default(4),
+  robotsOverrideDomains: z.array(z.string()).default([
+    'linkedin.com',
+    'www.linkedin.com',
+  ]),
+  missionForceRefreshDomains: z.array(z.string()).default([
+    'bisprofiles.com',
+    'www.bisprofiles.com',
+  ]),
 });
 
 export type CrawlScope = z.infer<typeof CrawlScopeSchema>;

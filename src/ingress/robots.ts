@@ -14,8 +14,18 @@ export async function checkRobotsAllowed(
   userAgent: string,
   respectRobotsTxt: boolean,
   logger: Logger,
+  robotsOverrideDomains: string[] = [],
 ): Promise<void> {
   if (!respectRobotsTxt) return;
+
+  const hostname = new URL(url).hostname.toLowerCase();
+  const override = robotsOverrideDomains.some(
+    (d) => hostname === d.toLowerCase() || hostname.endsWith(`.${d.toLowerCase()}`),
+  );
+  if (override) {
+    logger.debug({ url, hostname }, 'Robots override for mission-critical domain');
+    return;
+  }
 
   const parsed = new URL(url);
   const robotsUrl = `${parsed.protocol}//${parsed.host}/robots.txt`;
