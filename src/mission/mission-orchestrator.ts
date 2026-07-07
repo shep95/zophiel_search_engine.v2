@@ -1,4 +1,3 @@
-import { SunbizAdapter, type SunbizEntity } from '../adapters/sunbiz-adapter.js';
 import type { AppConfig } from '../config/index.js';
 import type { Logger } from '../core/logger.js';
 import type { IntelligenceFinding, IntelligenceMission, IntelligenceReport, ParsedQuery } from '../core/taxonomy.js';
@@ -25,7 +24,6 @@ export interface MissionResult {
 
 export class MissionOrchestrator {
   private readonly serpDiscovery: SerpDiscovery;
-  private readonly sunbiz: SunbizAdapter;
   private readonly identityResolver: IdentityResolver;
   private readonly outputQueue: DurableOutputQueue;
 
@@ -38,7 +36,6 @@ export class MissionOrchestrator {
       maxResults: 15,
       blockedHosts: config.blockedHosts,
     });
-    this.sunbiz = new SunbizAdapter(logger);
     this.identityResolver = new IdentityResolver();
     this.outputQueue = new DurableOutputQueue(config.dataDir);
   }
@@ -61,27 +58,15 @@ export class MissionOrchestrator {
     const log = this.logger.child({ missionId: mission.id, correlationId: mission.correlationId });
 
     try {
-      // PHASE 1: Discovery (SERP + Sunbiz adapter + curated seeds)
       mission.phase = 'discovering';
       metrics.startStage('discovery');
 
       const serpTargets = await this.serpDiscovery.discover(parsed);
-      const sunbizTargets = await this.sunbiz.discoverFromOfficerSearch(parsed);
-      const sunbizUrls = this.sunbiz.buildSearchUrls(parsed).map((url) => ({
-        url,
-        title: 'Sunbiz Search',
-        snippet: parsed.identity.displayName,
-        source: 'manual' as const,
-        relevanceScore: 0.9,
-      }));
-
-      const allTargets = [...sunbizTargets, ...sunbizUrls, ...serpTargets];
       const maxDiscoveries = options.maxDiscoveries ?? 12;
-      mission.discoveredUrls = dedupeTargets(allTargets).slice(0, maxDiscoveries);
+      mission.discoveredUrls = dedupeTargets(serpTargets).slice(0, maxDiscoveries);
       metrics.endStage('discovery');
       log.info({ discovered: mission.discoveredUrls.length, identity: parsed.identity.displayName }, 'Discovery complete');
 
-      // PHASE 2: Crawl execution
       mission.phase = 'crawling';
       metrics.startStage('ingress');
       await this.crawler.init();
@@ -121,37 +106,25 @@ export class MissionOrchestrator {
       mission.crawledUrls = urls;
       log.info({ crawled, attempts }, 'Crawl phase complete');
 
-      // PHASE 3: Sunbiz entity parsing from crawled pages
       metrics.startStage('distill');
-      const sunbizEntities: SunbizEntity[] = [];
       const hits = this.crawler.searchMission(parsed.identity.displayName || query, parsed, 25);
       const entities = this.crawler.collectEntities(hits);
-
-      for (const hit of hits) {
-        if (hit.document.url.includes('sunbiz.org') && hit.document.body.length > 200) {
-          const entity = this.sunbiz.parseEntityDetailPage(hit.document.body, hit.document.url);
-          if (entity) sunbizEntities.push(entity);
-        }
-      }
       metrics.endStage('distill');
 
-      // PHASE 4: Synthesis + Identity resolution
       mission.phase = 'synthesizing';
       metrics.startStage('synthesis');
 
-      let report = synthesizeReport(mission.id, parsed, hits, entities, sunbizEntities);
+      let report = synthesizeReport(mission.id, parsed, hits, entities);
 
       const rawNames = hits.flatMap((h) => [h.document.body, h.document.title]);
       const person = this.identityResolver.resolve(parsed, rawNames);
-      report.findings = this.identityResolver.enrichFindings(person, sunbizEntities, report.findings);
+      report.findings = this.identityResolver.enrichFindings(person, report.findings);
       report.resolvedIdentity = person;
-      report.sunbizEntities = sunbizEntities;
-      report.summary = buildEnhancedSummary(parsed, person, report.findings, sunbizEntities, hits.length);
+      report.summary = buildEnhancedSummary(parsed, person, report.findings, hits.length);
 
       metrics.endStage('synthesis');
       const finalMetrics = metrics.finalize(report.findings.length);
 
-      // PHASE 5: Durable output delivery
       const reportPath = this.outputQueue.deliver(report, finalMetrics);
 
       mission.phase = 'completed';
@@ -181,21 +154,20 @@ function buildEnhancedSummary(
   query: ParsedQuery,
   person: { canonicalName: string; aliases: string[] },
   findings: IntelligenceFinding[],
-  entities: SunbizEntity[],
   hitCount: number,
 ): string {
-  const capeCoral = findings.find((f) => f.category === 'location' && /cape coral/i.test(f.claim));
-  const orgs = entities.map((e) => e.name).filter(Boolean);
+  const locationFinding = findings.find((f) => f.category === 'location');
+  const orgs = findings.filter((f) => f.category === 'organization').map((f) => f.claim).slice(0, 3);
 
   const parts = [
-    `Intelligence mission for "${query.raw}" analyzed ${hitCount} sources.`,
+    `Intelligence mission for "${query.raw}" analyzed ${hitCount} indexed sources.`,
     `Resolved identity: ${person.canonicalName}.`,
   ];
 
-  if (capeCoral) parts.push(`Cape Coral, FL address confirmed: ${capeCoral.claim}.`);
+  if (locationFinding) parts.push(`Location signal: ${locationFinding.claim}.`);
   else if (query.locationPhrase) parts.push(`Location target: ${query.locationPhrase}.`);
 
-  if (orgs.length) parts.push(`Florida LLCs: ${orgs.join(', ')}.`);
+  if (orgs.length) parts.push(`Organizations mentioned: ${orgs.join('; ')}.`);
 
   return parts.join(' ');
 }

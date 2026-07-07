@@ -1,18 +1,13 @@
 import type { ExtractedEntity, SearchHit } from '../core/types.js';
 import type { IntelligenceFinding, IntelligenceReport, ParsedQuery } from '../core/taxonomy.js';
-import type { SunbizEntity } from '../adapters/sunbiz-adapter.js';
 import type { ResolvedPerson } from './identity-resolver.js';
-
-const ADDRESS_PATTERN =
-  /\b\d{1,5}\s+(?:SW|NW|SE|NE)\s+[\w\s]+(?:ST|CT|DR|RD|AVE|BLVD|COURT|DRIVE|STREET)[,\s]+(?:CAPE CORAL|Cape Coral)[,\s]+(?:FL|Florida)[,\s]*\d{5}/gi;
-
-const ADDRESS_LOOSE_PATTERN =
-  /\b\d{4}\s+SW\s+23(?:RD|rd)\s+CT[,\s]+CAPE CORAL[,\s]+FL[,\s]*33991/gi;
-
-const PERSON_PATTERN =
-  /\b(?:NEWTON|Newton),\s*(?:ASHER|Asher)(?:\s+[A-Z]\.?)?\b|\b(?:ASHER|Asher)(?:\s+[A-Z]\.?)?\s+(?:S\.?\s+)?(?:NEWTON|Newton)\b|\bAsher\s+Shepherd\s+Newton\b/gi;
-
-const ORG_PATTERN = /\b[A-Z][A-Z0-9.\s&]{2,30}\s+LLC\b/g;
+import {
+  buildPersonPatterns,
+  CITY_REGION_PATTERN,
+  INTERNATIONAL_ADDRESS_PATTERN,
+  ORGANIZATION_PATTERN,
+  textMatchesSubject,
+} from './subject-match.js';
 
 const NOISE_ORG_PATTERNS = [
   /business file/i,
@@ -23,12 +18,8 @@ const NOISE_ORG_PATTERNS = [
   /filing limited/i,
   /dissolution file/i,
   /miscellaneous forms/i,
-];
-
-const NOISE_LOCATION_PATTERNS = [
-  /tallahassee/i,
-  /bronough street/i,
-  /florida, florida/i,
+  /privacy policy/i,
+  /terms of service/i,
 ];
 
 export function synthesizeReport(
@@ -36,7 +27,6 @@ export function synthesizeReport(
   query: ParsedQuery,
   hits: SearchHit[],
   entities: ExtractedEntity[],
-  sunbizEntities: SunbizEntity[] = [],
 ): IntelligenceReport {
   const findings: IntelligenceFinding[] = [];
   const sources = hits
@@ -50,12 +40,12 @@ export function synthesizeReport(
   for (const hit of hits) {
     if (!isRelevantSource(hit, query)) continue;
     const body = `${hit.document.title}\n${hit.document.body}\n${hit.document.snippet}`;
-    extractFromText(body, hit.document.url, findings);
+    extractFromText(body, hit.document.url, query, findings);
   }
 
   for (const entity of entities) {
     if (entity.type === 'organization' && isNoiseOrg(entity.text)) continue;
-    if (entity.type === 'location' && isNoiseLocation(entity.text)) continue;
+    if (!textMatchesSubject(entity.text, query) && entity.type === 'person') continue;
     findings.push({
       category: mapEntityCategory(entity.type),
       claim: entity.text,
@@ -63,18 +53,6 @@ export function synthesizeReport(
       confidence: entity.confidence,
       evidence: `Entity extraction (${entity.type})`,
     });
-  }
-
-  for (const se of sunbizEntities) {
-    if (se.principalAddress && /cape coral/i.test(se.principalAddress)) {
-      findings.push({
-        category: 'location',
-        claim: se.principalAddress,
-        sourceUrl: se.detailUrl,
-        confidence: 0.95,
-        evidence: 'Sunbiz principal address',
-      });
-    }
   }
 
   const ranked = filterNoise(dedupeFindings(findings));
@@ -91,63 +69,70 @@ export function synthesizeReport(
 }
 
 function isRelevantSource(hit: SearchHit, query: ParsedQuery): boolean {
-  const hay = `${hit.document.title} ${hit.document.body} ${hit.document.url}`.toLowerCase();
-  const personMatch = query.personTokens.some((t) => hay.includes(t));
-  const locMatch = query.locationTokens.some((t) => hay.includes(t));
-  const sunbizEntity = hay.includes('sunbiz') && /newton|asher|zorak|bosley/i.test(hay);
-
-  if (hit.document.url.includes('dos.myflorida.com') && !sunbizEntity) return false;
-  if (hit.document.url.includes('bizapedia') && hit.document.body.includes('captcha')) return false;
-
-  return personMatch || locMatch || sunbizEntity || hit.document.url.includes('bisprofiles');
+  const hay = `${hit.document.title} ${hit.document.body} ${hit.document.url}`;
+  if (hay.toLowerCase().includes('captcha') && hit.document.body.length < 500) return false;
+  return textMatchesSubject(hay, query);
 }
 
-function extractFromText(text: string, sourceUrl: string, findings: IntelligenceFinding[]): void {
-  for (const addr of [...(text.match(ADDRESS_PATTERN) ?? []), ...(text.match(ADDRESS_LOOSE_PATTERN) ?? [])]) {
+function extractFromText(
+  text: string,
+  sourceUrl: string,
+  query: ParsedQuery,
+  findings: IntelligenceFinding[],
+): void {
+  for (const addr of text.match(INTERNATIONAL_ADDRESS_PATTERN) ?? []) {
     findings.push({
       category: 'location',
       claim: addr.trim().replace(/\s+/g, ' '),
       sourceUrl,
-      confidence: 0.92,
-      evidence: 'Cape Coral address pattern',
+      confidence: 0.8,
+      evidence: 'Street address pattern in source',
     });
   }
 
-  for (const person of text.match(PERSON_PATTERN) ?? []) {
+  for (const region of text.match(CITY_REGION_PATTERN) ?? []) {
+    if (!query.locationTokens.some((t) => region.toLowerCase().includes(t))) continue;
     findings.push({
-      category: 'identity',
-      claim: person.trim(),
+      category: 'location',
+      claim: region.trim(),
       sourceUrl,
-      confidence: 0.9,
-      evidence: 'Person name in source',
+      confidence: 0.72,
+      evidence: 'City/region pattern matching query location',
     });
   }
 
-  for (const org of text.match(ORG_PATTERN) ?? []) {
+  for (const pattern of buildPersonPatterns(query)) {
+    for (const person of text.match(pattern) ?? []) {
+      findings.push({
+        category: 'identity',
+        claim: person.trim(),
+        sourceUrl,
+        confidence: 0.88,
+        evidence: 'Person name matching query identity',
+      });
+    }
+  }
+
+  for (const org of text.match(ORGANIZATION_PATTERN) ?? []) {
     if (isNoiseOrg(org)) continue;
     findings.push({
       category: 'organization',
       claim: org.trim(),
       sourceUrl,
-      confidence: 0.85,
-      evidence: 'LLC entity in source',
+      confidence: 0.82,
+      evidence: 'Registered organization in source',
     });
   }
 }
 
 function isNoiseOrg(text: string): boolean {
-  return NOISE_ORG_PATTERNS.some((p) => p.test(text)) || text.length > 60;
-}
-
-function isNoiseLocation(text: string): boolean {
-  return NOISE_LOCATION_PATTERNS.some((p) => p.test(text));
+  return NOISE_ORG_PATTERNS.some((p) => p.test(text)) || text.length > 80;
 }
 
 function filterNoise(findings: IntelligenceFinding[]): IntelligenceFinding[] {
   return findings
     .filter((f) => {
       if (f.category === 'organization' && isNoiseOrg(f.claim)) return false;
-      if (f.category === 'location' && isNoiseLocation(f.claim)) return false;
       return f.confidence >= 0.5;
     })
     .sort((a, b) => b.confidence - a.confidence);
@@ -155,10 +140,14 @@ function filterNoise(findings: IntelligenceFinding[]): IntelligenceFinding[] {
 
 function mapEntityCategory(type: ExtractedEntity['type']): IntelligenceFinding['category'] {
   switch (type) {
-    case 'person': return 'identity';
-    case 'location': return 'location';
-    case 'organization': return 'organization';
-    default: return 'other';
+    case 'person':
+      return 'identity';
+    case 'location':
+      return 'location';
+    case 'organization':
+      return 'organization';
+    default:
+      return 'other';
   }
 }
 

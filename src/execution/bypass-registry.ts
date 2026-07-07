@@ -196,34 +196,8 @@ function buildAttempt(strategyId: BypassStrategyId, url: string): BypassAttempt 
   }
 }
 
-function rewriteSunbizUrl(url: string): string[] {
-  const alternates: string[] = [];
-
-  if (/searchTerm=Asher%20Shepherd%20Newton|searchTerm=asher%20shepherd%20newton/i.test(url)) {
-    alternates.push(
-      'https://search.sunbiz.org/Inquiry/CorporationSearch/SearchResults?inquiryType=OfficerRegisteredAgentName&searchTerm=Newton%20Asher%20S',
-    );
-  }
-
-  if (/OfficerRegisteredAgentName/i.test(url) && !/SearchResultDetail/i.test(url)) {
-    alternates.push(
-      'https://search.sunbiz.org/Inquiry/CorporationSearch/SearchResultDetail?inquirytype=OfficerRegisteredAgentName&directionType=Initial&searchNameOrder=NEWTONASHERS%20L240004449991&aggregateId=flal-l24000444999-0000-0000-0000-000000000000&searchTerm=Newton%20Asher%20S&listNameOrder=NEWTONASHERS%20L240004449991',
-    );
-  }
-
-  if (/BOSLEY\.SOCIAL/i.test(url)) {
-    alternates.push(
-      'https://search.sunbiz.org/Inquiry/CorporationSearch/SearchResultDetail?inquirytype=EntityName&directionType=Initial&searchNameOrder=BOSLEY.SOCIAL%20L24000444999&aggregateId=flal-l24000444999-0000-0000-0000-000000000000&searchTerm=BOSLEY.SOCIAL&listNameOrder=BOSLEY.SOCIAL%20L24000444999',
-    );
-  }
-
-  if (/ZORAKCORP|L25000235369/i.test(url)) {
-    alternates.push(
-      'https://search.sunbiz.org/Inquiry/CorporationSearch/SearchResultDetail?inquirytype=EntityName&directionType=Initial&searchNameOrder=ZORAKCORP%20L25000235369&aggregateId=flal-l25000235369-0000-0000-0000-000000000000&searchTerm=ZORAKCORP&listNameOrder=ZORAKCORP%20L25000235369',
-    );
-  }
-
-  return [...new Set(alternates)];
+function rewriteSunbizUrl(_url: string): string[] {
+  return [];
 }
 
 function rewriteFacebookUrl(url: string): string[] {

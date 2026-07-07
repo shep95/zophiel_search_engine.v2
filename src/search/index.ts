@@ -1,12 +1,22 @@
 import type Database from 'better-sqlite3';
 import type { CrawlResult, SearchHit } from '../core/types.js';
 import type { ParsedQuery } from '../core/taxonomy.js';
+import {
+  buildFtsFromParsed,
+  hasSearchConstraints,
+  hasUrlFilters,
+  matchesUrlOperators,
+  parseSearchQuery,
+  type ParsedSearchQuery,
+  type SearchOperators,
+} from './query-operators.js';
 
 export class SearchIndex {
   private readonly insertResultStmt;
   private readonly insertFtsStmt;
   private readonly deleteFtsStmt;
   private readonly searchStmt;
+  private readonly searchAllStmt;
 
   constructor(private readonly db: Database.Database) {
     this.insertResultStmt = db.prepare(`
@@ -59,6 +69,17 @@ export class SearchIndex {
       ORDER BY score
       LIMIT ?
     `);
+
+    this.searchAllStmt = db.prepare(`
+      SELECT
+        url,
+        title,
+        '' as body_snippet,
+        '' as keyword_snippet,
+        0 as score
+      FROM search_index
+      LIMIT ?
+    `);
   }
 
   index(result: CrawlResult): void {
@@ -97,28 +118,33 @@ export class SearchIndex {
   }
 
   search(query: string, limit = 20): SearchHit[] {
-    const ftsQuery = buildFtsQuery(query, 'or');
-    if (!ftsQuery) return [];
-    return this.executeSearch(ftsQuery, limit, query);
+    const parsed = parseSearchQuery(query);
+    if (!hasSearchConstraints(parsed)) return [];
+
+    const ftsQuery = buildFtsFromParsed(parsed, 'or');
+    return this.executeSearch(ftsQuery, limit, parsed);
   }
 
   searchMission(query: string, parsed: ParsedQuery, limit = 20): SearchHit[] {
+    const searchParsed = parseSearchQuery(query);
+    const operators = searchParsed.operators;
     const strategies: string[] = [];
 
     if (parsed.personTokens.length >= 2) {
-      strategies.push(buildFtsQuery(parsed.personTokens.join(' '), 'and') ?? '');
+      strategies.push(buildMissionFts(parsed.personTokens.join(' '), operators, 'and') ?? '');
     }
 
-    strategies.push(buildFtsQuery(query, 'or') ?? '');
-    strategies.push(buildFtsQuery(parsed.personTokens.join(' '), 'or') ?? '');
+    const mainText = searchParsed.freeText || stripOperatorFreeText(query);
+    strategies.push(buildMissionFts(mainText, operators, 'or') ?? '');
+    strategies.push(buildMissionFts(parsed.personTokens.join(' '), operators, 'or') ?? '');
 
     if (parsed.locationTokens.length) {
-      strategies.push(buildFtsQuery(parsed.locationTokens.join(' '), 'or') ?? '');
+      strategies.push(buildMissionFts(parsed.locationTokens.join(' '), operators, 'or') ?? '');
     }
 
     let hits: SearchHit[] = [];
     for (const ftsQuery of strategies.filter(Boolean)) {
-      hits = mergeHits(hits, this.executeSearch(ftsQuery, limit, query));
+      hits = mergeHits(hits, this.executeSearch(ftsQuery, limit, searchParsed));
     }
 
     return hits
@@ -130,16 +156,23 @@ export class SearchIndex {
       .slice(0, limit);
   }
 
-  private executeSearch(ftsQuery: string, limit: number, rawQuery: string): SearchHit[] {
-    const rows = this.searchStmt.all(ftsQuery, limit * 2) as Array<{
-      url: string;
-      title: string;
-      body_snippet: string;
-      keyword_snippet: string;
-      score: number;
-    }>;
+  count(): number {
+    const row = this.db.prepare('SELECT COUNT(*) as c FROM search_index').get() as { c: number };
+    return row.c;
+  }
 
-    return rows.map((row) => this.rowToHit(row, rawQuery)).slice(0, limit);
+  private executeSearch(ftsQuery: string | null, limit: number, parsed: ParsedSearchQuery): SearchHit[] {
+    const fetchLimit = hasUrlFilters(parsed.operators) ? limit * 10 : limit * 2;
+    const snippetQuery = parsed.freeText || parsed.raw;
+
+    const rows = ftsQuery
+      ? (this.searchStmt.all(ftsQuery, fetchLimit) as SearchRow[])
+      : (this.searchAllStmt.all(fetchLimit) as SearchRow[]);
+
+    return rows
+      .filter((row) => matchesUrlOperators(row.url, parsed.operators))
+      .map((row) => this.rowToHit(row, snippetQuery))
+      .slice(0, limit);
   }
 
   private rowToHit(
@@ -177,22 +210,20 @@ export class SearchIndex {
   }
 }
 
-function buildFtsQuery(query: string, mode: 'and' | 'or'): string | null {
-  const terms = query
-    .trim()
-    .replace(/[^\w\s"-]/g, ' ')
-    .split(/\s+/)
-    .filter((t) => t.length > 1);
+type SearchRow = {
+  url: string;
+  title: string;
+  body_snippet: string;
+  keyword_snippet: string;
+  score: number;
+};
 
-  if (terms.length === 0) return null;
+function buildMissionFts(freeText: string, operators: SearchOperators, mode: 'and' | 'or'): string | null {
+  return buildFtsFromParsed({ raw: freeText, freeText: freeText.trim(), operators }, mode);
+}
 
-  const quoted = query.match(/"([^"]+)"/);
-  if (quoted?.[1]) {
-    return `"${quoted[1].replace(/"/g, '')}"`;
-  }
-
-  const parts = terms.map((term) => `"${term}"*`);
-  return mode === 'and' ? parts.join(' AND ') : parts.join(' OR ');
+function stripOperatorFreeText(query: string): string {
+  return parseSearchQuery(query).freeText;
 }
 
 function missionRelevanceBoost(hit: SearchHit, parsed: ParsedQuery): number {
@@ -209,8 +240,7 @@ function missionRelevanceBoost(hit: SearchHit, parsed: ParsedQuery): number {
 
   if (parsed.phrases.some((p) => p.length > 5 && haystack.includes(p))) boost += 3;
 
-  if (hit.document.url.includes('sunbiz.org')) boost += 4;
-  if (hit.document.url.includes('linkedin.com')) boost += 2;
+  if (parsed.locationTokens.some((t) => hit.document.url.toLowerCase().includes(t))) boost += 1;
 
   return boost;
 }

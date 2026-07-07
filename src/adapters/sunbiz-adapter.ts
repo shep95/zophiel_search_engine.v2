@@ -19,7 +19,7 @@ export class SunbizAdapter {
 
   buildSearchUrls(parsed: ParsedQuery): string[] {
     const urls: string[] = [];
-    for (const term of parsed.identity.sunbizSearchTerms) {
+    for (const term of parsed.identity.registryNameVariants) {
       urls.push(
         `${SUNBIZ_BASE}/Inquiry/CorporationSearch/SearchResults?inquiryType=OfficerRegisteredAgentName&searchTerm=${encodeURIComponent(term)}`,
         `${SUNBIZ_BASE}/Inquiry/CorporationSearch/SearchResults?inquiryType=EntityName&searchTerm=${encodeURIComponent(parsed.personTokens[parsed.personTokens.length - 1] ?? term)}`,
@@ -30,7 +30,7 @@ export class SunbizAdapter {
 
   async discoverFromOfficerSearch(parsed: ParsedQuery): Promise<DiscoveredTarget[]> {
     const targets: DiscoveredTarget[] = [];
-    const searchTerm = parsed.identity.sunbizSearchTerms[0];
+    const searchTerm = parsed.identity.registryNameVariants[0];
     if (!searchTerm) return targets;
 
     const url = `${SUNBIZ_BASE}/Inquiry/CorporationSearch/SearchResults?inquiryType=OfficerRegisteredAgentName&searchTerm=${encodeURIComponent(searchTerm)}`;
@@ -96,16 +96,17 @@ export class SunbizAdapter {
     const docMatch = bodyText.match(/Document Number\s*([A-Z]?\d+)/i);
     const statusMatch = bodyText.match(/Status\s*(ACTIVE|INACTIVE|INACT)/i);
     const addressMatch = bodyText.match(
-      /Principal Address\s*(\d{1,5}\s+[\w\s]+(?:ST|CT|DR|RD|AVE|BLVD)[\w\s,]*(?:FL|Florida)\s*\d{5})/i,
+      /(?:Principal|Registered|Business)\s+Address\s*([^\n]{10,120})/i,
     );
 
     const officers: string[] = [];
     const officerMatches = bodyText.matchAll(
-      /(?:Title\s*)?(?:MGR|Manager|AMBR|Authorized Person)[^\n]*?(NEWTON,\s*ASHER\s*S?|ASHER\s*S?\s*NEWTON)/gi,
+      /(?:Title\s*)?(?:MGR|Manager|AMBR|Authorized Person|Director|Officer)[^\n]{0,40}/gi,
     );
-    for (const m of officerMatches) officers.push(m[1]!.trim());
-
-    const mgrBlock = bodyText.match(/NEWTON,\s*ASHER\s*S?[\s\S]{0,120}?(\d{1,5}\s+[\w\s]+(?:CT|ST|DR)[\w\s,]*(?:FL|Florida)\s*\d{5})/i);
+    for (const m of officerMatches) {
+      const line = m[0]!.trim();
+      if (line.length > 8 && line.length < 120) officers.push(line);
+    }
 
     if (!name && !docMatch) return null;
 
@@ -115,7 +116,7 @@ export class SunbizAdapter {
       status: statusMatch?.[1] ?? 'UNKNOWN',
       detailUrl: url,
       officers: [...new Set(officers)],
-      principalAddress: mgrBlock?.[1]?.trim() || addressMatch?.[1]?.trim() || '',
+      principalAddress: addressMatch?.[1]?.trim() || '',
     };
   }
 
@@ -128,7 +129,7 @@ export class SunbizAdapter {
 
     $('table tr, .searchResultDetail, .detailSection').each((_, row) => {
       const text = $(row).text();
-      if (!identityPattern.test(text) && !/NEWTON,\s*ASHER/i.test(text)) return;
+      if (!identityPattern.test(text)) return;
 
       const link = $(row).find('a[href*="SearchResultDetail"]').attr('href');
       const nameMatch = text.match(/([A-Z][A-Z0-9.\s&]+LLC)/);
@@ -168,9 +169,10 @@ function scoreSunbizLink(text: string, pageText: string, parsed: ParsedQuery): n
   for (const token of parsed.personTokens) {
     if (hay.includes(token)) score += 0.2;
   }
-  if (/newton,\s*asher/i.test(hay)) score += 0.4;
-  if (/cape\s+coral/i.test(hay)) score += 0.3;
-  if (/LLC|INC/i.test(text)) score += 0.1;
+  for (const loc of parsed.locationTokens) {
+    if (hay.includes(loc)) score += 0.15;
+  }
+  if (/LLC|INC|Ltd/i.test(text)) score += 0.1;
 
   return Math.min(1, score);
 }

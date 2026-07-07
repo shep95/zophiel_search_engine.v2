@@ -268,6 +268,10 @@ export class GhostChainCrawler {
     return this.searchIndex.search(query, limit);
   }
 
+  getIndexedPageCount(): number {
+    return this.searchIndex.count();
+  }
+
   searchMission(query: string, parsed: ParsedQuery, limit = 20): SearchHit[] {
     return this.searchIndex.searchMission(query, parsed, limit);
   }

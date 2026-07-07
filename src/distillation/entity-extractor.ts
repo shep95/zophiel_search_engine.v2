@@ -3,49 +3,35 @@ import type { ExtractedEntity, KeywordCluster } from '../core/types.js';
 const ENTITY_PATTERNS: Array<{ type: ExtractedEntity['type']; regex: RegExp; confidence: number }> = [
   {
     type: 'person',
-    regex: /\b(?:NEWTON|Newton),\s*(?:ASHER|Asher)(?:\s+[A-Z]\.?)?\b/g,
-    confidence: 0.92,
+    regex: /\b[A-Z][a-z]+(?:\s+[A-Z]\.?\s+)?[A-Z][a-z]+\b/g,
+    confidence: 0.65,
   },
   {
     type: 'person',
-    regex: /\b(?:ASHER|Asher)(?:\s+[A-Z]\.?)?\s+(?:S\.?\s+)?(?:NEWTON|Newton)\b/g,
-    confidence: 0.9,
-  },
-  {
-    type: 'person',
-    regex: /\bAsher\s+Shepherd\s+Newton\b/gi,
-    confidence: 0.95,
-  },
-  {
-    type: 'person',
-    regex: /\b[A-Z][a-z]+\s+[A-Z]\.\s+[A-Z][a-z]+\b/g,
+    regex: /\b[A-Z]{2,},\s*[A-Z][A-Z\s]{1,30}\b/g,
     confidence: 0.7,
   },
   {
     type: 'organization',
-    regex: /\b[A-Z][A-Za-z0-9&]+(?:\s+[A-Z][A-Za-z0-9&]+){0,4}\s+LLC\b/g,
-    confidence: 0.85,
-  },
-  {
-    type: 'organization',
-    regex: /\b(?:[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\s+(?:Inc|Ltd|Corp|Corporation|Company)\b/g,
-    confidence: 0.8,
-  },
-  {
-    type: 'location',
     regex:
-      /\b\d{1,5}\s+(?:[NSEW]\s+)?[A-Za-z0-9]+(?:\s+[A-Za-z0-9]+){0,3}\s+(?:St|Street|Ave|Avenue|Rd|Road|Dr|Drive|Ct|Court|Blvd|Lane|Ln)\b[^,\n]{0,40}(?:,\s*)?[A-Za-z\s]+,\s*(?:FL|Florida)\s+\d{5}(?:-\d{4})?/gi,
-    confidence: 0.88,
-  },
-  {
-    type: 'location',
-    regex: /\bCape Coral,\s*FL(?:\s+\d{5})?\b/gi,
+      /\b[A-Z][A-Za-z0-9&]+(?:\s+[A-Za-z0-9&]+){0,5}\s+(?:LLC|Ltd\.?|Limited|Inc\.?|Corp\.?|Corporation|Company|GmbH|Pty\.?|S\.A\.|PLC|Co\.)\b/g,
     confidence: 0.82,
   },
   {
     type: 'location',
-    regex: /\b(?:[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*),\s*(?:FL|Florida)\b/g,
-    confidence: 0.65,
+    regex:
+      /\b\d{1,6}\s+[\w\s.'-]{2,50}(?:Street|St|Road|Rd|Avenue|Ave|Drive|Dr|Lane|Ln|Court|Ct|Boulevard|Blvd|Way)\b[^,\n]{0,60}(?:,\s*[\w\s.'-]+){0,3}/gi,
+    confidence: 0.75,
+  },
+  {
+    type: 'location',
+    regex: /\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3},\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3}\b/g,
+    confidence: 0.6,
+  },
+  {
+    type: 'location',
+    regex: /\b\d{4,6}(?:-\d{2,4})?\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3}\b/g,
+    confidence: 0.55,
   },
 ];
 

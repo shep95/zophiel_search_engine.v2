@@ -48,10 +48,7 @@ export const ConfigSchema = z.object({
     'linkedin.com',
     'www.linkedin.com',
   ]),
-  missionForceRefreshDomains: z.array(z.string()).default([
-    'bisprofiles.com',
-    'www.bisprofiles.com',
-  ]),
+  missionForceRefreshDomains: z.array(z.string()).default([]),
 });
 
 export type CrawlScope = z.infer<typeof CrawlScopeSchema>;

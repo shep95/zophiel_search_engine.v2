@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { loadConfig } from '../config/index.js';
 import { createLogger } from '../core/logger.js';
 import { GhostChainCrawler } from '../crawler.js';
+import { GatherSearch } from '../intelligence/gather-search.js';
 
 const SeedBodySchema = z.object({
   urls: z.array(z.string().url().or(z.string().min(3))).min(1),
@@ -16,6 +17,7 @@ const SeedBodySchema = z.object({
 const SearchQuerySchema = z.object({
   q: z.string().min(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
+  gather: z.coerce.boolean().default(true),
 });
 
 export async function startApiServer(crawler: GhostChainCrawler) {
@@ -45,8 +47,23 @@ export async function startApiServer(crawler: GhostChainCrawler) {
       return reply.status(400).send({ error: 'Invalid query', details: parsed.error.flatten() });
     }
 
+    if (parsed.data.gather) {
+      const gather = new GatherSearch(crawler, config, logger);
+      const result = await gather.run(parsed.data.q, { limit: parsed.data.limit });
+      return {
+        query: parsed.data.q,
+        gathered: result.gathered,
+        pagesIndexedBefore: result.pagesIndexedBefore,
+        pagesIndexedAfter: result.pagesIndexedAfter,
+        pagesCrawled: result.pagesCrawled,
+        discoveredUrls: result.discoveredUrls,
+        count: result.hits.length,
+        hits: result.hits,
+      };
+    }
+
     const hits = crawler.search(parsed.data.q, parsed.data.limit);
-    return { query: parsed.data.q, count: hits.length, hits };
+    return { query: parsed.data.q, gathered: false, count: hits.length, hits };
   });
 
   await app.listen({ host: config.api.host, port: config.api.port });

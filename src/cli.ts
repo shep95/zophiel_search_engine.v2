@@ -4,6 +4,7 @@ import { GhostChainCrawler } from './crawler.js';
 import { createLogger } from './core/logger.js';
 import { startApiServer } from './api/server.js';
 import { MissionOrchestrator } from './mission/mission-orchestrator.js';
+import { GatherSearch, gatherSearchConfig } from './intelligence/gather-search.js';
 
 async function main() {
   const args = process.argv.slice(2);
@@ -44,22 +45,45 @@ async function main() {
     }
 
     case 'search': {
-      const query = args.slice(1).join(' ');
+      const rawArgs = args.slice(1);
+      const localOnly = rawArgs.includes('--local');
+      const query = rawArgs.filter((a) => a !== '--local').join(' ');
       if (!query) {
-        console.error('Usage: npm run search -- <query>');
+        console.error('Usage: npm run search -- <query> [--local]');
+        console.error('  --local   Search the index only; skip pass 1 gather');
         process.exit(1);
       }
-      const hits = crawler.search(query);
-      if (hits.length === 0) {
-        console.log('No results found.');
-      } else {
-        for (const hit of hits) {
-          console.log(`\n[${hit.score.toFixed(2)}] ${hit.document.title}`);
-          console.log(`  ${hit.document.url}`);
-          console.log(`  ${hit.document.snippet}`);
+
+      const gatherConfig = loadConfig(gatherSearchConfig());
+      const gatherLogger = createLogger(gatherConfig);
+      const gatherCrawler = new GhostChainCrawler(gatherConfig, gatherLogger);
+
+      try {
+        if (localOnly) {
+          const hits = gatherCrawler.search(query);
+          printSearchHits(hits, { gathered: false });
+        } else {
+          console.log(`\nGhost Chain — two-pass search`);
+          console.log(`Query: "${query}"\n`);
+
+          const gather = new GatherSearch(gatherCrawler, gatherConfig, gatherLogger);
+          const result = await gather.run(query);
+
+          if (result.gathered) {
+            console.log(
+              `Pass 1: gathered ${result.pagesCrawled} page(s) from ${result.discoveredUrls} target(s) ` +
+                `(${result.pagesIndexedBefore} → ${result.pagesIndexedAfter} indexed)`,
+            );
+          } else {
+            console.log(`Pass 1: skipped — ${result.pagesIndexedBefore} page(s) already indexed`);
+          }
+          console.log(`Pass 2: operator + keyword search\n`);
+
+          printSearchHits(result.hits, { gathered: result.gathered });
         }
+      } finally {
+        await gatherCrawler.close();
       }
-      await crawler.close();
       break;
     }
 
@@ -84,7 +108,7 @@ async function main() {
         bypassEnabled: true,
         bypassMaxAttempts: 5,
         robotsOverrideDomains: ['linkedin.com', 'www.linkedin.com'],
-        missionForceRefreshDomains: ['bisprofiles.com', 'www.bisprofiles.com', 'search.sunbiz.org'],
+        missionForceRefreshDomains: [],
       });
       const missionLogger = createLogger(missionConfig);
       const missionCrawler = new GhostChainCrawler(missionConfig, missionLogger);
@@ -146,14 +170,15 @@ Ghost Chain Search Engine
 Commands:
   seed <urls...>     Enqueue seed URLs into the crawl queue
   crawl [urls...]    Run crawler workers (optionally seed first)
-  search <query>     Search indexed content
+  search <query>       Two-pass search: gather subject pages, then search with operators
   investigate <query>  Run full discovery → crawl → intelligence report
   serve              Start API server + crawler workers
 
 Examples:
   npm run seed -- https://example.com
   npm run crawl
-  npm run search -- "machine learning"
+  npm run search -- "wei zhang who lives in beijing china"
+  npm run search -- "site:linkedin.com intitle:engineer maria silva peru"
   npm run dev -- serve
 `);
       await crawler.close();
@@ -164,3 +189,15 @@ main().catch((error) => {
   console.error(error);
   process.exit(1);
 });
+
+function printSearchHits(hits: Array<{ score: number; document: { title: string; url: string; snippet: string } }>, _meta: { gathered: boolean }) {
+  if (hits.length === 0) {
+    console.log('No results found.');
+    return;
+  }
+  for (const hit of hits) {
+    console.log(`\n[${hit.score.toFixed(2)}] ${hit.document.title}`);
+    console.log(`  ${hit.document.url}`);
+    console.log(`  ${hit.document.snippet}`);
+  }
+}

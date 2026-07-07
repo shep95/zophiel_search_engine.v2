@@ -2,7 +2,7 @@
 
 # Zophiel Search Engine v2
 
-### Ghost Chain Protocol — Universal Intelligence Crawler & Custom Search
+### Ghost Chain Protocol — International Intelligence Crawler & Custom Search
 
 [![Node.js](https://img.shields.io/badge/Node.js-≥20-339933?style=for-the-badge&logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
@@ -10,9 +10,9 @@
 [![SQLite FTS5](https://img.shields.io/badge/Search-SQLite%20FTS5-003B57?style=for-the-badge&logo=sqlite&logoColor=white)](https://www.sqlite.org/fts5.html)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)](LICENSE)
 
-**Stack-aware rendering · Multi-language site support · Identity synthesis · Production-grade crawl pipeline**
+**Two-pass gather & search · Search operators · Stack-aware rendering · Query-driven synthesis**
 
-[Quick Start](#-quick-start) · [Architecture](#-architecture) · [Investigate Mode](#-investigate-mode) · [Stack Detection](#-universal-stack-detection) · [API](#-api)
+[Quick Start](#-quick-start) · [Two-Pass Search](#-two-pass-search) · [Search Operators](#-search-operators) · [Architecture](#-architecture) · [API](#-api)
 
 </div>
 
@@ -20,54 +20,127 @@
 
 ## Overview
 
-**Zophiel v2** is a TypeScript search engine and intelligence crawler that goes beyond link ranking. It discovers targets from natural-language queries, renders pages across **any web stack** (Python/Django, Ruby/Rails, PHP/WordPress, ASP.NET, React SPAs, HTMX hybrids), distills structured findings, and synthesizes identity-linked reports.
+**Zophiel v2** is an international search engine and intelligence crawler. It does not rank the whole web — it **gathers pages about a subject**, indexes them locally, and lets you **refine that corpus** with keywords and search operators.
 
-Where traditional search engines return ten blue links, Zophiel returns **resolved identity, corporate filings, addresses, and cross-source evidence** — assembled from public records the index never connects for you.
+The mental model:
+
+| Role | What it does |
+|------|----------------|
+| **Crawler** | Field agent — discovers and fetches pages about the query subject |
+| **Index** | Case file — everything gathered, stored in SQLite FTS5 |
+| **Operators** | Analyst's highlighter — `site:`, `intitle:`, `filetype:`, `inurl:` |
+| **Second search** | Analyst reading the case file with filters — not blind re-queries |
+
+There are **no hardcoded people, URLs, or country-specific results** in the core logic. Discovery, indexing, and synthesis are driven entirely by what the user types.
 
 ```mermaid
 flowchart LR
-    subgraph Input
-        Q["Natural language query"]
-    end
+    Q["User query"]
+    P1["Pass 1: Gather\n(name + location)"]
+    IDX["Local FTS5 index"]
+    P2["Pass 2: Refine\n(operators + keywords)"]
+    R["Results / report"]
 
-    subgraph GhostChain["Ghost Chain Protocol"]
-        I["① Ingress"]
-        E["② Execution"]
-        D["③ Distillation"]
-        L["④ Learning"]
-        O["⑤ Output"]
-    end
-
-    subgraph Artifacts
-        R["Intelligence Report"]
-        S["SQLite FTS5 Index"]
-        M["Immune Memory"]
-    end
-
-    Q --> I --> E --> D --> L --> O
-    O --> R
-    O --> S
-    L --> M
+    Q --> P1 --> IDX --> P2 --> R
 ```
+
+---
+
+## Two-pass search
+
+`search` is the default intelligence command. It runs automatically:
+
+1. **Pass 1 — Gather** — Parses the subject (name, location, topic). If the index is empty or thin, the crawler discovers URLs via region-aware SERP, renders pages, and indexes them.
+2. **Pass 2 — Refine** — Searches the local index with the full query, including operators.
+
+```bash
+# Pass 1 gathers pages about Wei Zhang in Beijing; pass 2 searches the index
+npm run search -- "wei zhang who lives in beijing china"
+
+# After gather, narrow with operators (pass 2 only on existing index)
+npm run search -- "site:linkedin.com intitle:engineer wei zhang"
+
+# Skip gathering — index-only search
+npm run search -- "wei zhang" --local
+```
+
+International location parsing supports countries worldwide (China, Australia, Peru, UK, etc.). SERP discovery uses DuckDuckGo regional hints (`cn-zh`, `au-en`, `pe-es`, …) based on parsed location.
+
+---
+
+## Search operators
+
+Operators apply in **pass 2** — they filter and rank what is already in the case file.
+
+| Operator | Example | Behavior |
+|----------|---------|----------|
+| `site:` | `site:linkedin.com maria silva` | Restrict to hostname (includes subdomains) |
+| `filetype:` | `filetype:pdf annual report` | URL path ends with extension |
+| `intitle:` | `intitle:director james o'brien` | Match terms in page title (FTS column) |
+| `inurl:` | `inurl:profile sydney` | Match terms in the URL string |
+
+Combined example:
+
+```bash
+npm run search -- "site:gov.au filetype:pdf maria chen australia"
+```
+
+Quoted phrases and mixed free text are supported: `intitle:"annual report" filetype:pdf site:sec.gov`.
+
+---
+
+## Investigate mode
+
+For a full structured intelligence report (identity resolution, findings, durable JSON output):
+
+```bash
+npm run investigate -- "james o'brien who lives in sydney australia"
+```
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant CLI
+    participant Gather as Gather / Mission
+    participant SERP as SERP Discovery
+    participant Crawl as Crawler
+    participant Index as FTS5 Index
+    participant Synth as Synthesis
+
+    User->>CLI: search or investigate
+    CLI->>Gather: parse subject + operators
+    Gather->>Index: pass 2 search (existing corpus)
+    alt Index thin or empty
+        Gather->>SERP: discover name + location
+        SERP-->>Gather: ranked URLs
+        Gather->>Crawl: render + distill + index
+        Crawl->>Index: auto-index each page
+        Gather->>Index: pass 2 search again
+    end
+    Index-->>User: hits (+ report if investigate)
+    opt investigate
+        Gather->>Synth: identity + findings
+        Synth-->>User: data/reports/*.json
+    end
+```
+
+Reports are saved to `data/reports/<mission-id>.json`.
 
 ---
 
 ## Architecture
 
-Five-phase pipeline inspired by the Ghost Chain Protocol — each phase is independently observable, retryable, and mission-scoped.
-
 ```mermaid
 flowchart TB
-    subgraph Discovery["Discovery Layer"]
+    subgraph Discovery["Discovery"]
         QP[Query Parser]
+        RH[Region Hints]
         SERP[SERP Discovery]
-        SB[Sunbiz Adapter]
-        QP --> SERP
-        QP --> SB
+        QP --> RH --> SERP
     end
 
     subgraph Ingress["① Ingress"]
-        UV[URL Validator / SSRF Guard]
+        UV[URL Validator]
         RBT[Robots.txt]
         RL[Rate Limiter]
         CQ[Crawl Queue]
@@ -76,137 +149,39 @@ flowchart TB
 
     subgraph Execution["② Execution"]
         SD[Stack Detector]
-        BS[Browser Sandbox<br/>Playwright Chromium]
-        SH[Static HTML Scraper<br/>Cheerio SSR path]
-        CSS[CSS Scraper]
-        JS[JS / SPA Scraper]
-        SW[Stack Wait<br/>HTMX · Turbo · Swagger]
-        SD --> BS
-        SD --> SH
-        BS --> CSS
-        BS --> JS
-        BS --> SW
+        BS[Browser Sandbox]
+        SH[Static HTML / CSS / JS Scrapers]
+        SD --> BS --> SH
     end
 
     subgraph Distillation["③ Distillation"]
-        KE[Keyword Extractor]
-        EE[Entity Extractor]
+        KE[Keywords]
+        EE[Entities]
         PS[PII Scrubber]
-        KE --> EE --> PS
     end
 
-    subgraph Learning["④ Learning"]
-        IM[Immune Memory<br/>domain fingerprints]
-        FT[Freshness Tracker]
+    subgraph Index["④ Index & Search"]
+        FTS[SQLite FTS5]
+        OP[Query Operators]
+        GS[Gather Search]
+        FTS --> OP
+        GS --> FTS
     end
 
-    subgraph Output["⑤ Output"]
-        IDX[FTS5 Search Index]
+    subgraph Synthesis["⑤ Synthesis"]
+        SM[Subject Match]
         IR[Identity Resolver]
-        SYN[Intelligence Synthesis]
-        DQ[Durable Output Queue]
-        IDX --> IR --> SYN --> DQ
+        REP[Intelligence Report]
+        SM --> IR --> REP
     end
 
-    Discovery --> Ingress --> Execution --> Distillation --> Learning --> Output
+    Discovery --> Ingress --> Execution --> Distillation --> Index
+    Index --> Synthesis
 ```
 
-### Mission orchestrator flow
+### Universal stack detection
 
-```mermaid
-sequenceDiagram
-    actor User
-    participant CLI
-    participant Mission as Mission Orchestrator
-    participant Disc as Discovery
-    participant Crawl as Crawler Workers
-    participant Synth as Synthesis
-    participant Out as Durable Queue
-
-    User->>CLI: investigate "person + location"
-    CLI->>Mission: run(query)
-    Mission->>Disc: SERP + Sunbiz + curated seeds
-    Disc-->>Mission: 12 ranked targets
-    Mission->>Crawl: enqueue mission URLs
-    loop Each target
-        Crawl->>Crawl: detect stack → adapt render → extract
-        Crawl->>Crawl: index + immune memory update
-    end
-    Crawl-->>Mission: crawl complete
-    Mission->>Synth: identity resolve + report
-    Synth-->>Out: JSON report + metrics
-    Out-->>User: findings + sources
-```
-
----
-
-## Universal stack detection
-
-Zophiel does not execute Python, Ruby, or PHP — it **detects the stack** and adapts rendering strategy automatically.
-
-```mermaid
-flowchart TD
-    START[HTTP Response] --> DET{Stack Detector}
-    DET -->|Django Flask Rails WordPress| SSR["server_rendered<br/>Cheerio fast path + light browser"]
-    DET -->|HTMX Turbo Alpine| HYB["hybrid<br/>DOM settle + partial JS wait"]
-    DET -->|React Vue Next Blazor| SPA["spa<br/>network idle + mutation stability"]
-    DET -->|FastAPI Swagger ReDoc| API["api_docs<br/>OpenAPI UI wait"]
-
-    SSR --> MERGE[Merge text blocks]
-    HYB --> MERGE
-    SPA --> MERGE
-    API --> MERGE
-    MERGE --> OUT[RenderedPage + stackIntel]
-```
-
-| Language | Frameworks detected | Render mode |
-|----------|---------------------|-------------|
-| **Python** | Django, Flask, FastAPI, Streamlit, Wagtail, Gunicorn, Uvicorn | SSR / hybrid / API docs |
-| **JavaScript/TS** | React, Vue, Angular, Next.js, Express, NestJS | SPA / SSR |
-| **Ruby** | Rails, Sinatra | Hybrid / SSR |
-| **PHP** | WordPress, Laravel, Drupal | SSR |
-| **C#** | ASP.NET, Blazor | SSR / SPA |
-| **Java** | Spring, JSP | SSR |
-| **Go · Rust · Elixir · Perl** | Gin, Rocket, Phoenix, CGI | SSR / hybrid |
-| **Hybrid libs** | HTMX, Turbo, Alpine.js, jQuery | Hybrid |
-
----
-
-## Investigate mode
-
-One command runs the full intelligence pipeline:
-
-```bash
-npm run investigate -- "asher shepherd newton who lives in cape coral florida"
-```
-
-```mermaid
-flowchart LR
-    subgraph Findings["Example synthesized output"]
-        F1["Identity: Asher Shepherd Newton"]
-        F2["Alias: Asher S Newton / NEWTON, ASHER S"]
-        F3["Org: ZORAKCORP LLC"]
-        F4["Location: 2004 SW 23rd Ct, Cape Coral FL"]
-        F5["Link: middle name Shepherd = initial S"]
-    end
-
-    Q2[Query] --> P[Parse person + location]
-    P --> C[Cross-source crawl]
-    C --> F1
-    C --> F2
-    C --> F3
-    C --> F4
-    C --> F5
-```
-
-**What Zophiel finds that generic search often misses:**
-
-- Corporate registered-agent address linked to a person query (via [bisprofiles](https://bisprofiles.com) + Sunbiz cross-reference)
-- Middle-name ↔ public-record initial resolution (`Shepherd` → `S`)
-- Florida LLC entity graph (ZORAKCORP, BOSLEY.SOCIAL)
-- Sunbiz name-search traps (full name matches wrong entities — surfaced as negative intelligence)
-
-Reports are saved to `data/reports/<mission-id>.json` with stage timings and at-least-once delivery guarantees.
+Zophiel detects the web stack and adapts rendering (SSR, SPA, HTMX hybrid, API docs) across Python, Ruby, PHP, .NET, React, Vue, and more. See `src/execution/stack-detector.ts`.
 
 ---
 
@@ -231,25 +206,28 @@ npm run build
 
 | Command | Description |
 |---------|-------------|
-| `npm run investigate -- "<query>"` | Full discovery → crawl → intelligence report |
-| `npm run crawl` | Start persistent crawler workers |
+| `npm run search -- "<query>"` | **Two-pass search** — gather subject pages, then search with operators (default) |
+| `npm run search -- "<query>" --local` | Index-only search; skip pass 1 gather |
+| `npm run investigate -- "<query>"` | Full mission → crawl → structured intelligence report |
+| `npm run crawl` | Persistent crawler workers |
 | `npm run seed -- <url> [url...]` | Enqueue seed URLs |
-| `npm run search -- "<query>"` | Search the local FTS5 index |
-| `npm run api` | Start REST API on `:3847` |
+| `npm run api` | REST API on `:3847` |
 | `npm run dev` | Watch mode for CLI development |
 
 ### Example session
 
 ```bash
-# Run an intelligence mission
-npm run investigate -- "company name officer florida"
+# International person lookup (gather + search)
+npm run search -- "maria silva from lima peru"
 
-# Search indexed corpus
-npm run search -- "registered agent cape coral"
+# Refine gathered corpus
+npm run search -- "site:linkedin.com intitle:engineer maria silva"
 
-# Crawl specific targets
-npm run seed -- https://example.com
-npm run crawl
+# Deep intelligence report
+npm run investigate -- "james o'brien sydney australia"
+
+# General topic
+npm run search -- "renewable energy policy chile"
 ```
 
 ---
@@ -259,59 +237,45 @@ npm run crawl
 ```
 zophiel_search_engine.v2/
 ├── src/
+│   ├── intelligence/     # Two-pass gather-search orchestrator
+│   ├── discovery/        # Query parser, region hints, SERP discovery
+│   ├── search/           # FTS5 index + query operators
 │   ├── ingress/          # URL validation, robots, rate limits, queue
-│   ├── execution/        # Browser sandbox, stack detection, CSS/JS scrapers
-│   ├── discovery/        # Query parser, SERP discovery
-│   ├── adapters/         # Sunbiz and domain-specific adapters
+│   ├── execution/        # Browser sandbox, stack detection, scrapers
 │   ├── distillation/     # Keywords, entities, PII scrubbing
 │   ├── learning/         # Immune memory (per-domain fingerprints)
-│   ├── search/           # SQLite FTS5 index
-│   ├── synthesis/        # Identity resolver + intelligence reports
-│   ├── mission/          # Mission orchestrator
-│   ├── observability/    # Stage metrics
-│   ├── output/           # Durable JSONL queue
-│   └── cli.ts            # CLI entry point
-├── scripts/              # Test and utility scripts
+│   ├── synthesis/        # Subject match, identity resolver, reports
+│   ├── mission/          # Full investigate orchestrator
+│   ├── adapters/         # Optional domain adapters (e.g. registry sites)
+│   ├── api/              # Fastify REST server
+│   └── cli.ts
+├── scripts/
 └── data/                 # Runtime DB, reports (gitignored)
 ```
 
 ---
 
-## Execution layer detail
+## API
 
-```mermaid
-graph TB
-    subgraph Browser["Playwright Chromium"]
-        GOTO[page.goto]
-        HDR[Capture headers + cookies]
-        STACK[detectStack]
-        WAIT[waitForStackHydration]
-        SPA[waitForSpaContent]
-        HUMAN[Scroll + reveal hidden]
-        EXTRACT[in-page extract bundle]
-    end
-
-    subgraph Extractors
-        STATIC[parseStaticHtml]
-        CSS2[cssIntel]
-        JS2[jsIntel]
-    end
-
-    GOTO --> HDR --> STACK
-    STACK --> WAIT
-    STACK --> SPA
-    WAIT --> HUMAN --> EXTRACT
-    STACK --> STATIC
-    EXTRACT --> CSS2
-    EXTRACT --> JS2
-    STATIC --> MERGE[mergeTextBlocks]
-    CSS2 --> MERGE
-    JS2 --> MERGE
+```bash
+npm run api
+# → http://127.0.0.1:3847
 ```
 
-**CSS scraping:** stylesheet URLs, fetched `.css` content, hidden rules, computed visibility, `::before`/`::after` pseudo text.
+| Endpoint | Description |
+|----------|-------------|
+| `GET /search?q=...&gather=true` | Two-pass search (gather on by default) |
+| `GET /search?q=...&gather=false` | Index-only search |
+| `GET /health` | Health check |
+| `GET /stats` | Crawl queue stats |
+| `POST /seed` | Enqueue URLs |
 
-**JS / SPA scraping:** framework detection, JSON-LD, `__NEXT_DATA__`, API JSON capture, shadow DOM traversal, DOM mutation quiet period.
+Example:
+
+```bash
+curl "http://127.0.0.1:3847/search?q=wei+zhang+beijing+china&limit=10"
+curl "http://127.0.0.1:3847/search?q=site%3Alinkedin.com+wei+zhang&gather=false"
+```
 
 ---
 
@@ -327,39 +291,6 @@ Key options in `src/config/index.ts`:
 | `piiScrubMode` | `sensitive_only` | Scrub SSN/email/phone; keep names/addresses |
 | `respectRobotsTxt` | `true` | Honor robots.txt |
 | `concurrency` | `3` | Parallel crawl workers |
-
----
-
-## API
-
-```bash
-npm run api
-# → http://127.0.0.1:3847
-```
-
-Fastify server with CORS — exposes search and crawl endpoints for integration into larger pipelines.
-
----
-
-## Observability
-
-Every mission emits structured stage metrics:
-
-```mermaid
-xychart-beta
-    title "Typical mission stage timing (ms)"
-    x-axis ["Discovery", "Ingress", "Render", "Distill", "Synthesis"]
-    y-axis "Milliseconds" 0 --> 150000
-    bar [1250, 184, 136862, 242, 16]
-```
-
-| Metric | Description |
-|--------|-------------|
-| `pagesCrawled` | Successfully indexed pages |
-| `pagesFailed` | HTTP / render failures |
-| `pagesBlocked` | robots.txt / policy blocks |
-| `antiBotDetections` | Captcha / bot-wall hits |
-| `findingsCount` | Structured intelligence findings |
 
 ---
 
@@ -380,11 +311,11 @@ xychart-beta
 
 ## Roadmap
 
-- [ ] Sunbiz ASP.NET entity detail drill-down (session-aware)
-- [ ] Force-refresh high-value sources on investigate missions
-- [ ] CAPTCHA / proxy lane for gated sites (Bizapedia, LinkedIn)
-- [ ] Address extraction in synthesis pipeline from CSS pseudo-text
-- [ ] Web UI for investigate results
+- [ ] Country-specific registry adapters (plugin architecture)
+- [ ] Web UI for search and investigate results
+- [ ] CAPTCHA / proxy lane for gated sites
+- [ ] Persistent index sharing across missions
+- [ ] Additional operators (`-exclude`, exact phrase combos)
 
 ---
 
@@ -396,7 +327,7 @@ MIT © [shep95](https://github.com/shep95)
 
 <div align="center">
 
-**Zophiel Search Engine v2** — *Search that understands how the web is built.*
+**Zophiel Search Engine v2** — *Gather first. Search with intent.*
 
 [github.com/shep95/zophiel_search_engine.v2](https://github.com/shep95/zophiel_search_engine.v2)
 

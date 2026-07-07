@@ -28,10 +28,10 @@ const CAPTCHA_MARKERS = [
 ];
 
 const SHELL_MARKERS = [
-  'manage/change existing business',
-  'mind your sunbizness',
   'library and information services',
   'the division of corporations is the state',
+  'page not found',
+  'access denied',
 ];
 
 const LOGIN_MARKERS = ['you must log in', 'login_form', 'checkpoint'];
@@ -64,8 +64,8 @@ export function detectBlock(input: {
     return { kind: 'login_wall', confidence: 0.85, signature: 'login wall', recoverable: false };
   }
 
-  if (input.url.includes('sunbiz.org') && isSunbizShell(text, input.bodyTextLength)) {
-    return { kind: 'shell_redirect', confidence: 0.9, signature: 'sunbiz nav shell', recoverable: true };
+  if (isRegistryShell(text, input.bodyTextLength)) {
+    return { kind: 'shell_redirect', confidence: 0.85, signature: 'registry nav shell', recoverable: true };
   }
 
   if (SHELL_MARKERS.filter((m) => text.includes(m)).length >= 2 && input.bodyTextLength < 2500) {
@@ -79,18 +79,26 @@ export function detectBlock(input: {
   return { kind: 'none', confidence: 0, signature: '', recoverable: false };
 }
 
-function isSunbizShell(text: string, bodyLength: number): boolean {
-  const hasShell = text.includes('manage/change existing business') || text.includes('mind your sunbizness');
-  const hasEntity =
-    text.includes('detail by entity name') ||
+function isRegistryShell(text: string, bodyLength: number): boolean {
+  const hasShell =
+    text.includes('manage/change existing business') ||
+    text.includes('search by entity name') ||
+    text.includes('corporate registry');
+  const hasRecord =
     text.includes('document number') ||
-    text.includes('registered agent name') ||
-    text.includes('newton, asher') ||
-    text.includes('zorakcorp');
-  return hasShell && !hasEntity && bodyLength < 4000;
+    text.includes('registered office') ||
+    text.includes('principal address') ||
+    text.includes('date of birth') ||
+    bodyLength > 5000;
+  return hasShell && !hasRecord && bodyLength < 4000;
 }
 
-export function isMissionUsefulContent(body: string, title: string, url: string): boolean {
+export function isMissionUsefulContent(
+  body: string,
+  title: string,
+  url: string,
+  subjectTokens: string[] = [],
+): boolean {
   const text = `${title}\n${body}`.toLowerCase();
   if (text.length < 80) return false;
 
@@ -105,25 +113,17 @@ export function isMissionUsefulContent(body: string, title: string, url: string)
   });
 
   if (block.kind !== 'none') {
-    if (block.kind === 'shell_redirect' || block.kind === 'captcha_gate' || block.kind === 'empty_shell') return false;
+    if (block.kind === 'shell_redirect' || block.kind === 'captcha_gate' || block.kind === 'empty_shell') {
+      return false;
+    }
     if (block.confidence > 0.85 && block.kind !== 'http_403') return false;
   }
 
-  if (url.includes('sunbiz.org') && isSunbizShell(text, text.length)) return false;
-
-  const personSignals = /newton|asher|zorakcorp|cape coral|registered agent/i.test(text);
-  const orgSignals = /llc|document number|principal address|officer/i.test(text);
-  const directorySignals = /residents|profile|people named/i.test(text);
-
-  if (url.includes('bisprofiles.com') || url.includes('bizapedia.com')) {
-    return personSignals || orgSignals;
-  }
-  if (url.includes('sunbiz.org')) {
-    return orgSignals || personSignals;
-  }
-  if (url.includes('floridaresidentsdirectory.com')) {
-    return directorySignals || personSignals;
+  if (subjectTokens.length > 0) {
+    const hits = subjectTokens.filter((t) => t.length > 1 && text.includes(t)).length;
+    if (hits >= Math.min(2, subjectTokens.length)) return true;
   }
 
-  return text.length > 200;
+  const signalWords = /profile|directory|officer|director|biography|linkedin|resume|cv|company|address/i;
+  return signalWords.test(text) || text.length > 400;
 }

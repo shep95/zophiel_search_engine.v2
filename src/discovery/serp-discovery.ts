@@ -1,6 +1,7 @@
 import * as cheerio from 'cheerio';
 import type { Logger } from '../core/logger.js';
 import type { DiscoveredTarget, ParsedQuery } from '../core/taxonomy.js';
+import { serpRegionCode } from './region-hints.js';
 import { validateSeedUrl } from '../ingress/url-validator.js';
 
 const BLOCKED_DISCOVERY_HOSTS = ['localhost', '127.0.0.1'];
@@ -16,23 +17,27 @@ export class SerpDiscovery {
     private readonly options: DiscoveryOptions,
   ) {}
 
-  async discover(parsed: ParsedQuery): Promise<DiscoveredTarget[]> {
-    const searchQuery = [
-      parsed.identity.displayName,
-      parsed.locationPhrase || parsed.locationTokens.join(' '),
-    ]
-      .filter(Boolean)
-      .join(' ');
+  async discover(parsed: ParsedQuery, discoveryQuery?: string): Promise<DiscoveredTarget[]> {
+    const searchQuery =
+      discoveryQuery ??
+      [
+        parsed.identity.displayName,
+        parsed.locationPhrase || parsed.locationTokens.join(' '),
+      ]
+        .filter(Boolean)
+        .join(' ');
 
-    const ddgResults = await this.searchDuckDuckGo(searchQuery);
-    const curated = this.curatedSeeds(parsed);
-    const merged = this.mergeAndRank([...curated, ...ddgResults], parsed);
+    const ddgResults = await this.searchDuckDuckGo(searchQuery, serpRegionCode(parsed));
+    const merged = this.mergeAndRank(ddgResults, parsed);
     this.logger.info({ count: merged.length, query: parsed.raw }, 'Discovery complete');
     return merged.slice(0, this.options.maxResults);
   }
 
-  private async searchDuckDuckGo(query: string): Promise<DiscoveredTarget[]> {
-    const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+  private async searchDuckDuckGo(query: string, regionCode?: string): Promise<DiscoveredTarget[]> {
+    const params = new URLSearchParams({ q: query });
+    if (regionCode) params.set('kl', regionCode);
+
+    const url = `https://html.duckduckgo.com/html/?${params.toString()}`;
     try {
       const response = await fetch(url, {
         headers: {
@@ -105,71 +110,6 @@ export class SerpDiscovery {
     }
   }
 
-  private curatedSeeds(parsed: ParsedQuery): DiscoveredTarget[] {
-    const seeds: DiscoveredTarget[] = [];
-    const display = parsed.identity.displayName;
-    const lastName = parsed.personTokens[parsed.personTokens.length - 1] ?? '';
-
-    if (parsed.objective === 'person_lookup') {
-      for (const term of parsed.identity.sunbizSearchTerms) {
-        seeds.push({
-          url: `https://search.sunbiz.org/Inquiry/CorporationSearch/SearchResults?inquiryType=OfficerRegisteredAgentName&searchTerm=${encodeURIComponent(term)}`,
-          title: `Sunbiz Officer: ${term}`,
-          snippet: `Florida filings for ${display}`,
-          source: 'manual',
-          relevanceScore: 0.95,
-        });
-      }
-
-      seeds.push(
-        {
-          url: `https://bisprofiles.com/fl/zorakcorp-l25000235369`,
-          title: 'ZORAKCORP LLC Cape Coral',
-          snippet: display,
-          source: 'manual',
-          relevanceScore: 0.99,
-        },
-        {
-          url: `https://search.sunbiz.org/Inquiry/CorporationSearch/SearchResultDetail?inquirytype=OfficerRegisteredAgentName&directionType=Initial&searchNameOrder=NEWTONASHERS%20L240004449991&aggregateId=flal-l24000444999-0000-0000-0000-000000000000&searchTerm=Newton%20Asher%20S&listNameOrder=NEWTONASHERS%20L240004449991`,
-          title: 'NEWTON ASHER S — ZORAKCORP Sunbiz Detail',
-          snippet: 'Florida registered agent filing',
-          source: 'manual',
-          relevanceScore: 0.99,
-        },
-        {
-          url: `https://search.sunbiz.org/Inquiry/CorporationSearch/SearchResultDetail?inquirytype=EntityName&directionType=Initial&searchNameOrder=BOSLEY.SOCIAL%20L24000444999&aggregateId=flal-l24000444999-0000-0000-0000-000000000000&searchTerm=BOSLEY.SOCIAL&listNameOrder=BOSLEY.SOCIAL%20L24000444999`,
-          title: 'BOSLEY.SOCIAL LLC Sunbiz',
-          snippet: 'Florida LLC - Newton Asher S MGR',
-          source: 'manual',
-          relevanceScore: 0.98,
-        },
-        {
-          url: `https://www.bizapedia.com/people/asher-newton.html`,
-          title: 'Asher Newton Bizapedia',
-          snippet: `${display} Cape Coral FL`,
-          source: 'manual',
-          relevanceScore: 0.85,
-        },
-        {
-          url: `https://www.floridaresidentsdirectory.com/name/${lastName}/cape-coral`,
-          title: 'Florida Residents Directory',
-          snippet: `${display} Cape Coral`,
-          source: 'manual',
-          relevanceScore: 0.75,
-        },
-        {
-          url: `https://www.facebook.com/asher.newton.3`,
-          title: 'Asher Newton Facebook',
-          snippet: display,
-          source: 'manual',
-          relevanceScore: 0.6,
-        },
-      );
-    }
-
-    return seeds;
-  }
-
   private mergeAndRank(targets: DiscoveredTarget[], parsed: ParsedQuery): DiscoveredTarget[] {
     const seen = new Set<string>();
     const scored: DiscoveredTarget[] = [];
@@ -200,9 +140,11 @@ export class SerpDiscovery {
       if (phrase.length > 4 && haystack.includes(phrase)) score += 0.25;
     }
 
-    if (target.url.includes('sunbiz.org')) score += 0.3;
-    if (target.url.includes('linkedin.com')) score += 0.2;
-    if (target.url.includes('facebook.com')) score -= 0.1;
+    for (const loc of parsed.locationTokens) {
+      if (haystack.includes(loc)) score += 0.2;
+    }
+
+    if (target.url.includes('linkedin.com')) score += 0.15;
 
     return Math.min(1, score);
   }

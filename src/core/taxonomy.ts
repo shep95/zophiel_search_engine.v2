@@ -33,7 +33,8 @@ export interface ParsedQuery {
   identity: {
     displayName: string;
     variants: string[];
-    sunbizSearchTerms: string[];
+    /** Name order variants for public-registry style lookups (Last First, First Last, etc.). */
+    registryNameVariants: string[];
     middleInitial?: string;
   };
   locationPhrase: string;
@@ -82,14 +83,6 @@ export interface IntelligenceReport {
     confidence: number;
     linkedMiddleName?: string;
   };
-  sunbizEntities?: Array<{
-    name: string;
-    documentNumber: string;
-    status: string;
-    detailUrl: string;
-    officers: string[];
-    principalAddress: string;
-  }>;
 }
 
 export interface PipelineStageResult<T> {

@@ -1,38 +1,32 @@
 import type { MissionObjective, ParsedQuery } from '../core/taxonomy.js';
-
-const US_STATES = new Set([
-  'alabama', 'alaska', 'arizona', 'arkansas', 'california', 'colorado', 'connecticut',
-  'delaware', 'florida', 'georgia', 'hawaii', 'idaho', 'illinois', 'indiana', 'iowa',
-  'kansas', 'kentucky', 'louisiana', 'maine', 'maryland', 'massachusetts', 'michigan',
-  'minnesota', 'mississippi', 'missouri', 'montana', 'nebraska', 'nevada',
-  'new hampshire', 'new jersey', 'new mexico', 'new york', 'north carolina', 'north dakota',
-  'ohio', 'oklahoma', 'oregon', 'pennsylvania', 'rhode island', 'south carolina',
-  'south dakota', 'tennessee', 'texas', 'utah', 'vermont', 'virginia', 'washington',
-  'west virginia', 'wisconsin', 'wyoming', 'fl',
-]);
+import { COUNTRIES_AND_REGIONS, isLocationToken, US_STATES } from './region-hints.js';
+import { stripSearchOperators } from '../search/query-operators.js';
 
 const LOCATION_PHRASES = [
   /who\s+lives\s+in\s+(.+)/i,
+  /who\s+is\s+from\s+(.+)/i,
   /from\s+(.+)/i,
   /located\s+in\s+(.+)/i,
   /based\s+in\s+(.+)/i,
-  /in\s+([a-z\s,]+(?:florida|fl))/i,
+  /living\s+in\s+(.+)/i,
+  /resident\s+of\s+(.+)/i,
 ];
 
 const STOP_WORDS = new Set([
   'who', 'lives', 'in', 'the', 'a', 'an', 'from', 'at', 'of', 'and', 'or', 'is', 'was',
   'that', 'this', 'with', 'for', 'on', 'to', 'be', 'are', 'by', 'as', 'it', 'my', 'me',
+  'living', 'resident',
 ]);
 
 export interface CanonicalIdentity {
   displayName: string;
   variants: string[];
-  sunbizSearchTerms: string[];
+  registryNameVariants: string[];
   middleInitial?: string;
 }
 
 export function parseQuery(raw: string): ParsedQuery {
-  const normalized = raw.trim().replace(/\s+/g, ' ');
+  const normalized = stripSearchOperators(raw).trim().replace(/\s+/g, ' ');
   let locationPhrase = '';
   let namePart = normalized;
 
@@ -46,10 +40,10 @@ export function parseQuery(raw: string): ParsedQuery {
   }
 
   if (!locationPhrase) {
-    const capeMatch = normalized.match(/^(.+?)\s+(cape\s+coral(?:\s+florida)?)\s*$/i);
-    if (capeMatch) {
-      namePart = capeMatch[1]!.trim();
-      locationPhrase = capeMatch[2]!.trim();
+    const trailingIn = normalized.match(/^(.+?)\s+in\s+(.{2,80})$/i);
+    if (trailingIn) {
+      namePart = trailingIn[1]!.trim();
+      locationPhrase = trailingIn[2]!.trim().replace(/[?.!,]+$/, '');
     }
   }
 
@@ -77,19 +71,30 @@ function tokenizeLocation(text: string): string[] {
   const tokens = lower.split(/\s+/).filter((t) => t.length > 1 && !STOP_WORDS.has(t));
   const result = new Set<string>(tokens);
 
-  if (lower.includes('cape coral')) {
-    result.add('cape');
-    result.add('coral');
-    result.add('cape coral');
+  for (const country of COUNTRIES_AND_REGIONS) {
+    if (lower.includes(country)) {
+      for (const part of country.split(/\s+/)) {
+        if (part.length > 1) result.add(part);
+      }
+      if (country.includes(' ')) result.add(country);
+    }
   }
-  if (lower.includes('florida') || lower.includes(' fl')) result.add('florida');
 
   return [...result];
 }
 
 function extractEmbeddedLocation(text: string): string {
-  const m = text.match(/(cape\s+coral|florida|\bfl\b)/i);
-  return m ? m[0] : '';
+  const lower = text.toLowerCase();
+
+  for (const country of COUNTRIES_AND_REGIONS) {
+    if (lower.includes(country)) return country;
+  }
+
+  for (const state of US_STATES) {
+    if (lower.includes(state)) return state;
+  }
+
+  return '';
 }
 
 function tokenizePerson(text: string, locationTokens: string[]): string[] {
@@ -97,12 +102,19 @@ function tokenizePerson(text: string, locationTokens: string[]): string[] {
   return text
     .toLowerCase()
     .split(/\s+/)
-    .filter((t) => t.length > 1 && !STOP_WORDS.has(t) && !locSet.has(t) && !US_STATES.has(t));
+    .filter(
+      (t) =>
+        t.length > 1 &&
+        !STOP_WORDS.has(t) &&
+        !locSet.has(t) &&
+        !US_STATES.has(t) &&
+        !isLocationToken(t),
+    );
 }
 
 function buildCanonicalIdentity(personTokens: string[]): CanonicalIdentity {
   if (personTokens.length === 0) {
-    return { displayName: '', variants: [], sunbizSearchTerms: [] };
+    return { displayName: '', variants: [], registryNameVariants: [] };
   }
 
   const first = personTokens[0] ?? '';
@@ -124,7 +136,7 @@ function buildCanonicalIdentity(personTokens: string[]): CanonicalIdentity {
     `${capitalize(last)}, ${capitalize(first)}${middleInitial ? ` ${middleInitial}` : ''}`,
   ].filter(Boolean));
 
-  const sunbizSearchTerms = [
+  const registryNameVariants = [
     `${capitalize(last)} ${capitalize(first)}`,
     `${capitalize(first)} ${capitalize(last)}`,
     middleInitial ? `${capitalize(last)} ${capitalize(first)} ${middleInitial}` : '',
@@ -134,7 +146,7 @@ function buildCanonicalIdentity(personTokens: string[]): CanonicalIdentity {
   return {
     displayName,
     variants: [...variants],
-    sunbizSearchTerms: [...new Set(sunbizSearchTerms)],
+    registryNameVariants: [...new Set(registryNameVariants)],
     middleInitial,
   };
 }
